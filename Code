@@ -12,16 +12,244 @@ from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from xgboost import plot_importance
 
+#lets us see columns prevents Jupyter from redacting them
+pd.set_option('display.max_columns', None)
+
+df0 = pd.read_csv('2017_Yellow_Taxi_Trip_Data.csv')
+
+#import predicted fares and mean distance and duration from the last course
+nyc_preds_means = pd.read_csv('nyc_preds_means.csv')
+df0.head()
+
+df1 = df0.copy()
+df1 = df1.merge(nyc_preds_means,
+                left_index=True,
+                right_index=True)
+df1.head()
+
+df1 = df0.copy()
+df1 = df1.merge(nyc_preds_means, left_index=True, right_index=True)
+df1.head()
+
+df0.info()
+
+#isolate customers who paid credit card
+df1 = df1[df1['payment_type']==1]
+
+#calculate the percent of tip
+df1['tip_percent'] = df1['tip_amount'] / (df1['total_amount'] - df1['tip_amount'])
+
+#target variable - binary of whether or not a customer tipped >= 20% (yes or no)
+df1['generous'] = df1['tip_percent']
+df1['generous'] = (df1['generous'] >= 0.2)
+df1['generous'] = df1['generous'].astype(int)
+
+import datetime as dt
+df1['tpep_pickup_datetime'] = pd.to_datetime(df1['tpep_pickup_datetime'], format='%m/%d/%Y %I:%M:%S %p')
+df1['tpep_dropoff_datetime'] = pd.to_datetime(df1['tpep_dropoff_datetime'], format='%m/%d/%Y %I:%M:%S %p')
+
+#creating a day column that contains only the day of the week when each passenger was picked up. Then, convert the values to lowercase.
+df1['day'] = df1['tpep_pickup_datetime'].dt.day_name().str.lower()
+
+#create four new columns that represent time of day bins each column should contain yes or no that indicate whether a trip began during following times: 
+df1['am_rush'] = df1['tpep_pickup_datetime'].dt.hour
+df1['daytime'] = df1['tpep_pickup_datetime'].dt.hour
+df1['pm_rush'] = df1['tpep_pickup_datetime'].dt.hour
+df1['nighttime'] = df1['tpep_pickup_datetime'].dt.hour
+
+
+#WRITE 4 FUNCTIONS TO CONVERT NEW COLUMN TO BINARY 
+#am_rush
+def am_rush(hour):
+    if 6 <= hour['am_rush'] < 10:
+        val = 1
+    else:
+        val = 0
+    return val
+df1['am_rush'] = df1.apply(am_rush, axis=1)
+df1['am_rush'].head()
+
+#daytime()
+def daytime(hour):
+    if 10 <= hour['daytime'] < 16:
+        val = 1
+    else:
+        val = 0
+    return val
+df1['daytime'] = df1.apply(daytime, axis=1)
+
+#pm_rush
+def pm_rush(hour):
+    if 16 <= hour['pm_rush'] < 20:
+        val = 1
+    else:
+        val = 0
+    return val
+df1['pm_rush'] = df1.apply(pm_rush, axis=1)
+
+#nighttime()
+def nighttime(hour):
+    if 20 <= hour['nighttime'] < 24:
+        val = 1
+    elif 0 <= hour['nighttime'] < 6:
+        val = 1
+    else:
+        val = 0
+    return val
+df1['nighttime'] = df1.apply(nighttime, axis=1)
+
+#create month column
+df1['month'] = df1['tpep_pickup_datetime'].dt.strftime('%b').str.lower()
+df1.head()
+df1.info()
+
+
+#DROP ALL IRRELEVANT COLUMNS
+drop_cols = ['Unnamed: 0', 'tpep_pickup_datetime', 'tpep_dropoff_datetime',
+             'payment_type', 'trip_distance', 'store_and_fwd_flag', 'payment_type',
+             'fare_amount', 'extra', 'mta_tax', 'tip_amount', 'tolls_amount',
+             'improvement_surcharge', 'total_amount', 'tip_percent']
+
+df1 = df1.drop(drop_cols, axis=1)
+df1.info()
+
+#VARIABLE ENCODING - many columns are categorical so to be recognisable to get_dummies, change to type(str) then to binary
+cols_to_str = ['RatecodeID', 'PULocationID', 'DOLocationID', 'VendorID']
+for col in cols_to_str:
+    df1[col] = df1[col].astype('str')
+
+df2 = pd.get_dummies(df1, drop_first=True)
+df2.info()
+
+#evaluation metric - get class balance of generous column
+df2['generous'].value_counts()
 
 
 
+#MODELING
+y = df2['generous']
+X = df2.drop('generous', axis=1)
+X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
 
 
+rf = RandomForestClassifier(random_state=42)
+cv_params = {'max_depth': [None],
+             'max_features': [1.0],
+             'max_samples': [0.7],
+             'min_samples_leaf': [1],
+             'min_samples_split': [2],
+             'n_estimators': [300]
+             }
 
+scoring = {'accuracy', 'precision', 'recall', 'f1'}
+rf1 = GridSearchCV(rf, cv_params, scoring=scoring, cv=4, refit='f1')
 
+%%time
+rf1.fit(X_train, y_train)
 
+#pickle saves the models and reads them back in - helpful when performing a search over many possible hyperparameter values
+import pickle 
+path = '/home/jovyan/work/'
 
+def write_pickle(path, model_object, save_name:str):
+    with open(path + save_name + '.pickle', 'wb') as to_write:
+        pickle.dump(model_object, to_write)
 
+def read_pickle(path, saved_model_name:str):
+    with open(path + saved_model_name + '.pickle', 'rb') as to_read:
+        model = pickle.load(to_read)
+        return model
 
+rf_cv1 = read_pickle(path, 'taxi_rf_cv1')
+#best avg score
+rf1.best_score_ 
+#best hyperparameter
+rf1.best_params_
 
+#use make_results function to output all of the scores of your model.
+def make_results(model_name:str, model_object, metric:str):
+  metric_dict = {'precision': 'mean_test_precision',
+                 'recall': 'mean_test_recall',
+                 'f1': 'mean_test_f1',
+                 'accuracy': 'mean_test_accuracy',
+                 }
+  cv_results = pd.DataFrame(model_object.cv_results_)
+  best_estimator_results = cv_results.iloc[cv_results[metric_dict[metric]].idxmax(), :]
+  f1 = best_estimator_results.mean_test_f1
+  recall = best_estimator_results.mean_test_recall
+  precision = best_estimator_results.mean_test_precision
+  accuracy = best_estimator_results.mean_test_accuracy
+  table = pd.DataFrame({'model': [model_name],
+                      'precision': [precision],
+                      'recall': [recall],
+                      'F1': [f1],
+                      'accuracy': [accuracy],
+                      },
+                     )
+  return table
 
+import sklearn
+print(sklearn.__version__)
+
+# Call 'make_results()' on the GridSearch object
+results = make_results('RF CV', rf1, 'f1')
+results
+
+preds = rf1.best_estimator_.predict(X_test)
+
+#get_test_scores() function you will use to output the scores of the model on the test data.
+def get_test_scores(model_name:str, preds, y_test_data):
+    accuracy = accuracy_score(y_test_data, preds)
+    precision = precision_score(y_test_data, preds)
+    recall = recall_score(y_test_data, preds)
+    f1 = f1_score(y_test_data, preds)
+
+    table = pd.DataFrame({'model': [model_name],
+                        'precision': [precision],
+                        'recall': [recall],
+                        'F1': [f1],
+                        'accuracy': [accuracy]
+                        })
+    return table
+
+rf_test_scores = get_test_scores('RF test', preds, y_test)
+results = pd.concat([results, rf_test_scores], axis=0)
+results
+
+#IMPROVING SCORES USING AN XGBOOST MODEL
+xgb = XGBClassifier(objective='binary:logistic', random_state=0)
+cv_params = {'learning_rate': [0.1],
+             'max_depth': [8],
+             'min_child_weight': [2],
+             'n_estimators': [500]
+             }
+scoring = {'accuracy', 'precision', 'recall', 'f1'}
+xgb1 = GridSearchCV(xgb, cv_params, scoring=scoring, cv=4, refit='f1')
+
+%%time
+xgb1.fit(X_train, y_train)
+
+xgb1.best_score_
+
+xgb1.best_params_
+
+xgb1_cv_results = make_results('XGB CV', xgb1, 'f1')
+results = pd.concat([results, xgb1_cv_results], axis=0)
+results
+
+#getscores on test data
+preds = xgb1.best_estimator_.predict(X_test)
+
+xgb_test_scores = get_test_scores('XGB test', preds, y_test)
+results = pd.concat([results, xgb_test_scores], axis=0)
+results
+
+#CONFUSION MATRIX
+cm = confusion_matrix(y_test, preds, labels=xgb1.classes_)
+# Plot confusion matrix
+disp = ConfusionMatrixDisplay(confusion_matrix=cm,
+                             display_labels=xgb1.classes_)
+disp.plot();
+
+#Feature Importance
+plot_importance(xgb1.best_estimator_, max_num_features=10);
